@@ -214,18 +214,21 @@ def generate_styled_daily_excel(port_table, sup_df, col_df, df_pay_filtered,
     tot_coll  = _kpi("إجمالي التحصيل")
     tot_cust  = _kpi("عدد العملاء")
     coll_pct  = (tot_coll / tot_debt * 100) if tot_debt > 0 else 0
-    cnt_cont  = _kpi("تم التوصل")
-    cnt_noans = _kpi("منها لا يرد ومغلق") if ("منها لا يرد ومغلق" in port_table.columns) else _kpi("لا يرد ومغلق")
-    cnt_rate  = _kpi("نسبة تم التوصل %")
+    cnt_cont    = _kpi("تم التوصل")
+    cnt_noans   = _kpi("لا يرد ومغلق") if ("لا يرد ومغلق" in port_table.columns) else _kpi("منها لا يرد ومغلق")
+    cnt_nocont  = _kpi("عدم توصل") if ("عدم توصل" in port_table.columns) else _kpi("إجمالي عدم التوصل")
+    cnt_rate    = _kpi("نسبة تم التوصل %")
+    noans_rate  = _kpi("نسبة لا يرد ومغلق %")
+    nocont_rate = _kpi("نسبة عدم التوصل %")
 
     kpi_defs = [
-        ("👥 إجمالي العملاء",     f"{tot_cust:,.0f}",    1,  2),
-        ("💰 إجمالي المديونية",   f"{tot_debt:,.0f} ﷼",  3,  4),
-        ("💵 إجمالي التحصيل",    f"{tot_coll:,.0f} ﷼",  5,  6),
-        ("📈 نسبة التحصيل",      f"{coll_pct:.1f}%",     7,  8),
-        ("📞 تم التوصل",          f"{cnt_cont:,.0f}",     9,  10),
-        ("📵 لا يرد ومغلق",      f"{cnt_noans:,.0f}",    11, 12),
-        ("📈 نسبة التوصل",       f"{cnt_rate:.1f}%",     13, 14),
+        ("👥 إجمالي العملاء",     f"{tot_cust:,.0f}",                        1,  2),
+        ("💰 إجمالي المديونية",   f"{tot_debt:,.0f} ﷼",                      3,  4),
+        ("💵 إجمالي التحصيل",    f"{tot_coll:,.0f} ﷼",                      5,  6),
+        ("📈 نسبة التحصيل",      f"{coll_pct:.1f}%",                         7,  8),
+        ("📞 تم التوصل",          f"{cnt_cont:,.0f} ({cnt_rate:.1f}%)",       9,  10),
+        ("📵 لا يرد ومغلق",      f"{cnt_noans:,.0f} ({noans_rate:.1f}%)",    11, 12),
+        ("🚫 عدم توصل",          f"{cnt_nocont:,.0f} ({nocont_rate:.1f}%)",  13, 14),
     ]
 
     ws.row_dimensions[3].height = 16
