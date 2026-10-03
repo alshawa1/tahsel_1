@@ -646,39 +646,64 @@ df_dist_filtered['حالة_التوصل'] = classify_contact_status_series(
     df_dist_filtered, main_col=main_status_col, sub_col=sub_status_col, note_col=note_status_col
 )
 
-cnt_contacted     = (df_dist_filtered['حالة_التوصل'] == 'تم التوصل').sum()
-cnt_no_ans_closed = (df_dist_filtered['حالة_التوصل'] == 'لا يرد ومغلق').sum()
-cnt_other         = (df_dist_filtered['حالة_التوصل'] == 'عدم توصل - أخرى').sum()
-cnt_total         = len(df_dist_filtered)
-cnt_rate          = (cnt_contacted / cnt_total * 100) if cnt_total > 0 else 0.0
-cnt_no_ans_pct    = (cnt_no_ans_closed / cnt_total * 100) if cnt_total > 0 else 0.0
+# تعيين أولويات حالات التوصل عند تكرار العميل (تم التوصل > لا يرد ومغلق > عدم توصل)
+prio_map = {'تم التوصل': 1, 'لا يرد ومغلق': 2, 'عدم توصل - أخرى': 3, 'عدم توصل': 3}
+inv_map  = {1: 'تم التوصل', 2: 'لا يرد ومغلق', 3: 'عدم توصل'}
+
+if DIST_CID and DIST_CID in df_dist_filtered.columns:
+    df_dist_filtered['_prio'] = df_dist_filtered['حالة_التوصل'].map(prio_map).fillna(3)
+    cust_overall = df_dist_filtered.groupby(DIST_CID)['_prio'].min()
+    cnt_contacted     = int((cust_overall == 1).sum())
+    cnt_no_ans_closed = int((cust_overall == 2).sum())
+    cnt_other         = int((cust_overall == 3).sum())
+    cnt_total         = len(cust_overall)
+else:
+    cnt_contacted     = int((df_dist_filtered['حالة_التوصل'] == 'تم التوصل').sum())
+    cnt_no_ans_closed = int((df_dist_filtered['حالة_التوصل'] == 'لا يرد ومغلق').sum())
+    cnt_other         = int((df_dist_filtered['حالة_التوصل'].isin(['عدم توصل - أخرى', 'عدم توصل'])).sum())
+    cnt_total         = len(df_dist_filtered)
+
+cnt_rate          = round(cnt_contacted / cnt_total * 100, 1) if cnt_total > 0 else 0.0
+cnt_no_ans_pct    = round(cnt_no_ans_closed / cnt_total * 100, 1) if cnt_total > 0 else 0.0
+cnt_other_pct     = round(cnt_other / cnt_total * 100, 1) if cnt_total > 0 else 0.0
 
 # جدول تحليل التوصل حسب التصنيف النشط (المحفظة / شهر الإسناد / سنة الفصل)
 if DIST_ACTIVE_COL and DIST_ACTIVE_COL in df_dist_filtered.columns:
-    contact_by_grp = df_dist_filtered.groupby([DIST_ACTIVE_COL, 'حالة_التوصل']).size().unstack(fill_value=0).reset_index()
+    if DIST_CID and DIST_CID in df_dist_filtered.columns:
+        cust_status_df = df_dist_filtered.groupby([DIST_ACTIVE_COL, DIST_CID])['_prio'].min().reset_index()
+        cust_status_df['حالة_العميل'] = cust_status_df['_prio'].map(inv_map)
+        contact_by_grp = cust_status_df.groupby([DIST_ACTIVE_COL, 'حالة_العميل']).size().unstack(fill_value=0).reset_index()
+    else:
+        contact_by_grp = df_dist_filtered.groupby([DIST_ACTIVE_COL, 'حالة_التوصل']).size().unstack(fill_value=0).reset_index()
+
     contact_by_grp.columns.name = None
-    
-    for req_col in ['تم التوصل', 'لا يرد ومغلق', 'عدم توصل - أخرى']:
+
+    for req_col in ['تم التوصل', 'لا يرد ومغلق', 'عدم توصل']:
         if req_col not in contact_by_grp.columns:
-            contact_by_grp[req_col] = 0
+            if req_col == 'عدم توصل' and 'عدم توصل - أخرى' in contact_by_grp.columns:
+                contact_by_grp['عدم توصل'] = contact_by_grp['عدم توصل - أخرى']
+            else:
+                contact_by_grp[req_col] = 0
 
     contact_by_grp.rename(columns={DIST_ACTIVE_COL: GROUP_LABEL}, inplace=True)
-    # إجمالي عدم التوصل = لا يرد ومغلق + عدم توصل - أخرى
-    contact_by_grp['إجمالي عدم التوصل'] = contact_by_grp['لا يرد ومغلق'] + contact_by_grp['عدم توصل - أخرى']
-    contact_by_grp['إجمالي العملاء'] = contact_by_grp['تم التوصل'] + contact_by_grp['إجمالي عدم التوصل']
+    contact_by_grp['إجمالي العملاء'] = contact_by_grp['تم التوصل'] + contact_by_grp['لا يرد ومغلق'] + contact_by_grp['عدم توصل']
 
-    # نسبتان متكاملتان مجموعهما 100% دائماً
     contact_by_grp['نسبة تم التوصل %'] = contact_by_grp.apply(
         lambda r: round(r['تم التوصل'] / r['إجمالي العملاء'] * 100, 1) if r['إجمالي العملاء'] > 0 else 0.0, axis=1
     )
-    contact_by_grp['نسبة عدم التوصل %'] = contact_by_grp.apply(
-        lambda r: round(r['إجمالي عدم التوصل'] / r['إجمالي العملاء'] * 100, 1) if r['إجمالي العملاء'] > 0 else 0.0, axis=1
+    contact_by_grp['نسبة لا يرد ومغلق %'] = contact_by_grp.apply(
+        lambda r: round(r['لا يرد ومغلق'] / r['إجمالي العملاء'] * 100, 1) if r['إجمالي العملاء'] > 0 else 0.0, axis=1
     )
-    # لا يرد ومغلق كعدد خام فقط (للاستعراض، بدون نسبة منفصلة لتجنب التعارض)
-    contact_by_grp.rename(columns={'لا يرد ومغلق': 'منها لا يرد ومغلق'}, inplace=True)
+    contact_by_grp['نسبة عدم التوصل %'] = contact_by_grp.apply(
+        lambda r: round(r['عدم توصل'] / r['إجمالي العملاء'] * 100, 1) if r['إجمالي العملاء'] > 0 else 0.0, axis=1
+    )
 
-    contact_cols_order = [GROUP_LABEL, 'إجمالي العملاء', 'تم التوصل', 'نسبة تم التوصل %',
-                          'إجمالي عدم التوصل', 'نسبة عدم التوصل %', 'منها لا يرد ومغلق', 'عدم توصل - أخرى']
+    contact_cols_order = [
+        GROUP_LABEL, 'إجمالي العملاء',
+        'تم التوصل', 'نسبة تم التوصل %',
+        'لا يرد ومغلق', 'نسبة لا يرد ومغلق %',
+        'عدم توصل', 'نسبة عدم التوصل %'
+    ]
     contact_by_grp = contact_by_grp[[c for c in contact_cols_order if c in contact_by_grp.columns]]
 
     if is_month_mode:
@@ -690,18 +715,19 @@ if DIST_ACTIVE_COL and DIST_ACTIVE_COL in df_dist_filtered.columns:
     else:
         contact_by_grp = contact_by_grp.sort_values('تم التوصل', ascending=False).reset_index(drop=True)
 
-    _c_tot_contacted = contact_by_grp['تم التوصل'].sum()
-    _c_tot_uncnt     = contact_by_grp['إجمالي عدم التوصل'].sum()
-    _c_tot_all       = _c_tot_contacted + _c_tot_uncnt
+    _c_tot_contacted = int(contact_by_grp['تم التوصل'].sum())
+    _c_tot_noans     = int(contact_by_grp['لا يرد ومغلق'].sum())
+    _c_tot_nocont    = int(contact_by_grp['عدم توصل'].sum())
+    _c_tot_all       = _c_tot_contacted + _c_tot_noans + _c_tot_nocont
     cnt_tot_row = {
         GROUP_LABEL:           '📊 الإجمالي',
         'إجمالي العملاء':     int(_c_tot_all),
         'تم التوصل':          int(_c_tot_contacted),
         'نسبة تم التوصل %':   round(_c_tot_contacted / _c_tot_all * 100, 1) if _c_tot_all > 0 else 0.0,
-        'إجمالي عدم التوصل': int(_c_tot_uncnt),
-        'نسبة عدم التوصل %':  round(_c_tot_uncnt / _c_tot_all * 100, 1) if _c_tot_all > 0 else 0.0,
-        'منها لا يرد ومغلق':  int(contact_by_grp['منها لا يرد ومغلق'].sum()) if 'منها لا يرد ومغلق' in contact_by_grp.columns else 0,
-        'عدم توصل - أخرى':   int(contact_by_grp['عدم توصل - أخرى'].sum()) if 'عدم توصل - أخرى' in contact_by_grp.columns else 0,
+        'لا يرد ومغلق':       int(_c_tot_noans),
+        'نسبة لا يرد ومغلق %': round(_c_tot_noans / _c_tot_all * 100, 1) if _c_tot_all > 0 else 0.0,
+        'عدم توصل':          int(_c_tot_nocont),
+        'نسبة عدم التوصل %':  round(_c_tot_nocont / _c_tot_all * 100, 1) if _c_tot_all > 0 else 0.0,
     }
     contact_table_display = pd.concat([contact_by_grp, pd.DataFrame([cnt_tot_row])], ignore_index=True)
 else:
@@ -710,29 +736,43 @@ else:
 # ══════════════════════════════════════════════════════
 #  حساب ملخص الأداء الرئيسي ونسب التوصل (المحافظ / أشهر الإسناد / عمر الدين)
 # ══════════════════════════════════════════════════════
-if DIST_ACTIVE_COL and DIST_CID and DIST_DEBT_AMT and DIST_ACTIVE_COL in df_dist_filtered.columns:
-    dist_summary = df_dist_filtered.groupby(DIST_ACTIVE_COL).agg(
-        عدد_العملاء=(DIST_CID, 'nunique'),
-        اجمالي_المديونية=(DIST_DEBT_AMT, 'sum'),
-        تم_التوصل=('حالة_التوصل', lambda s: (s == 'تم التوصل').sum()),
-        لا_يرد_ومغلق=('حالة_التوصل', lambda s: (s == 'لا يرد ومغلق').sum()),
-        عدم_توصل_اخرى=('حالة_التوصل', lambda s: (s == 'عدم توصل - أخرى').sum())
-    ).reset_index()
-    dist_summary.columns = [GROUP_LABEL, 'عدد العملاء', 'إجمالي المديونية', 'تم التوصل', 'منها لا يرد ومغلق', 'عدم توصل - أخرى']
-    dist_summary['إجمالي عدم التوصل'] = dist_summary['منها لا يرد ومغلق'] + dist_summary['عدم توصل - أخرى']
+if DIST_ACTIVE_COL and DIST_DEBT_AMT and DIST_ACTIVE_COL in df_dist_filtered.columns:
+    # 1. إجمالي المديونية من صفوف المديونيات
+    debt_by_grp = df_dist_filtered.groupby(DIST_ACTIVE_COL)[DIST_DEBT_AMT].sum().reset_index()
+    debt_by_grp.columns = [GROUP_LABEL, 'إجمالي المديونية']
 
-    # المقام الحقيقي الدقيق = تم التوصل + إجمالي عدم التوصل
-    _tot_all = (
-        dist_summary['تم التوصل'] + dist_summary['إجمالي عدم التوصل']
-    ).replace(0, float('nan'))
-    
-    # نسبتان أساسيتان متكاملتان مجموعهما 100.0% دائماً بدون أي تعارض
-    dist_summary['نسبة تم التوصل %']   = (dist_summary['تم التوصل'] / _tot_all * 100).round(1).fillna(0.0)
-    dist_summary['نسبة عدم التوصل %']  = (dist_summary['إجمالي عدم التوصل'] / _tot_all * 100).round(1).fillna(0.0)
+    # 2. حالات وتوزيع العملاء على مستوى الهويات الفريدة
+    if DIST_CID and DIST_CID in df_dist_filtered.columns:
+        cust_status_df = df_dist_filtered.groupby([DIST_ACTIVE_COL, DIST_CID])['_prio'].min().reset_index()
+        cust_status_df['حالة_العميل'] = cust_status_df['_prio'].map(inv_map)
+        cust_summary = cust_status_df.groupby([DIST_ACTIVE_COL, 'حالة_العميل']).size().unstack(fill_value=0).reset_index()
+    else:
+        cust_summary = df_dist_filtered.groupby([DIST_ACTIVE_COL, 'حالة_التوصل']).size().unstack(fill_value=0).reset_index()
+
+    cust_summary.columns.name = None
+    for req_col in ['تم التوصل', 'لا يرد ومغلق', 'عدم توصل']:
+        if req_col not in cust_summary.columns:
+            if req_col == 'عدم توصل' and 'عدم توصل - أخرى' in cust_summary.columns:
+                cust_summary['عدم توصل'] = cust_summary['عدم توصل - أخرى']
+            else:
+                cust_summary[req_col] = 0
+
+    cust_summary.rename(columns={DIST_ACTIVE_COL: GROUP_LABEL}, inplace=True)
+    cust_summary['عدد العملاء'] = cust_summary['تم التوصل'] + cust_summary['لا يرد ومغلق'] + cust_summary['عدم توصل']
+
+    # حساب النسب الثلاث المستقلة المتكاملة (مجموعها 100.0% دائماً)
+    _tot_cust = cust_summary['عدد العملاء'].replace(0, float('nan'))
+    cust_summary['نسبة تم التوصل %']   = (cust_summary['تم التوصل'] / _tot_cust * 100).round(1).fillna(0.0)
+    cust_summary['نسبة لا يرد ومغلق %'] = (cust_summary['لا يرد ومغلق'] / _tot_cust * 100).round(1).fillna(0.0)
+    cust_summary['نسبة عدم التوصل %']  = (cust_summary['عدم توصل'] / _tot_cust * 100).round(1).fillna(0.0)
+
+    dist_summary = debt_by_grp.merge(cust_summary, on=GROUP_LABEL, how='outer').fillna(0)
 else:
     dist_summary = pd.DataFrame(columns=[
-        GROUP_LABEL, 'عدد العملاء', 'إجمالي المديونية', 'تم التوصل', 'نسبة تم التوصل %',
-        'إجمالي عدم التوصل', 'نسبة عدم التوصل %', 'منها لا يرد ومغلق'
+        GROUP_LABEL, 'عدد العملاء', 'إجمالي المديونية',
+        'تم التوصل', 'نسبة تم التوصل %',
+        'لا يرد ومغلق', 'نسبة لا يرد ومغلق %',
+        'عدم توصل', 'نسبة عدم التوصل %'
     ])
 
 pay_by_grp = df_pay_filtered.groupby(PAY_ACTIVE_COL).agg(
@@ -768,8 +808,8 @@ port_table['نسبة التحصيل %'] = port_table.apply(
 cols_order = [
     GROUP_LABEL, 'عدد العملاء', 'إجمالي المديونية', 'إجمالي التحصيل', 'نسبة التحصيل %',
     'تم التوصل', 'نسبة تم التوصل %',
-    'إجمالي عدم التوصل', 'نسبة عدم التوصل %',
-    'منها لا يرد ومغلق',
+    'لا يرد ومغلق', 'نسبة لا يرد ومغلق %',
+    'عدم توصل', 'نسبة عدم التوصل %',
     'التحصيل اليومي (اليوم)', 'التحصيل اليومي (أمس)'
 ]
 cols_order = [c for c in cols_order if c in port_table.columns]
@@ -784,15 +824,12 @@ else:
     port_table = port_table[cols_order].sort_values('إجمالي التحصيل', ascending=False).reset_index(drop=True)
 
 total_row = {}
-tot_cust_all  = port_table['عدد العملاء'].sum() if 'عدد العملاء' in port_table.columns else 0
-tot_debt_all  = port_table['إجمالي المديونية'].sum() if 'إجمالي المديونية' in port_table.columns else 0
-tot_coll_all  = port_table['إجمالي التحصيل'].sum() if 'إجمالي التحصيل' in port_table.columns else 0
-tot_cnt_all   = port_table['تم التوصل'].sum() if 'تم التوصل' in port_table.columns else 0
-tot_uncnt_all = port_table['إجمالي عدم التوصل'].sum() if 'إجمالي عدم التوصل' in port_table.columns else 0
-
-true_contact_total = tot_cnt_all + tot_uncnt_all
-if true_contact_total == 0:
-    true_contact_total = tot_cust_all
+tot_cust_all   = port_table['عدد العملاء'].sum() if 'عدد العملاء' in port_table.columns else 0
+tot_debt_all   = port_table['إجمالي المديونية'].sum() if 'إجمالي المديونية' in port_table.columns else 0
+tot_coll_all   = port_table['إجمالي التحصيل'].sum() if 'إجمالي التحصيل' in port_table.columns else 0
+tot_cnt_all    = port_table['تم التوصل'].sum() if 'تم التوصل' in port_table.columns else 0
+tot_noans_all  = port_table['لا يرد ومغلق'].sum() if 'لا يرد ومغلق' in port_table.columns else 0
+tot_nocont_all = port_table['عدم توصل'].sum() if 'عدم توصل' in port_table.columns else 0
 
 for col in cols_order:
     if col == GROUP_LABEL:
@@ -800,9 +837,11 @@ for col in cols_order:
     elif col == 'نسبة التحصيل %':
         total_row[col] = round(tot_coll_all / tot_debt_all * 100, 1) if tot_debt_all > 0 else 0.0
     elif col in ('نسبة تم التوصل %', 'نسبة التوصل %'):
-        total_row[col] = round(tot_cnt_all / true_contact_total * 100, 1) if true_contact_total > 0 else 0.0
+        total_row[col] = round(tot_cnt_all / tot_cust_all * 100, 1) if tot_cust_all > 0 else 0.0
+    elif col == 'نسبة لا يرد ومغلق %':
+        total_row[col] = round(tot_noans_all / tot_cust_all * 100, 1) if tot_cust_all > 0 else 0.0
     elif col == 'نسبة عدم التوصل %':
-        total_row[col] = round(tot_uncnt_all / true_contact_total * 100, 1) if true_contact_total > 0 else 0.0
+        total_row[col] = round(tot_nocont_all / tot_cust_all * 100, 1) if tot_cust_all > 0 else 0.0
     else:
         total_row[col] = port_table[col].sum() if pd.api.types.is_numeric_dtype(port_table[col]) else ''
 
@@ -962,9 +1001,9 @@ st.markdown("---")
 st.markdown('<div class="section-header">📞 مؤشرات وحالات التوصل وعدم التوصل (لا يرد ومغلق)</div>', unsafe_allow_html=True)
 
 ck1, ck2, ck3 = st.columns(3)
-ck1.metric("📞 تم التوصل", f"{cnt_contacted:,}", delta=f"{cnt_rate:.1f}% من الإجمالي")
-ck2.metric("📵 لا يرد ومغلق", f"{cnt_no_ans_closed:,}", delta=f"{cnt_no_ans_pct:.1f}% من الإجمالي")
-ck3.metric("📈 نسبة التوصل الإجمالية", f"{cnt_rate:.1f}%")
+ck1.metric("📞 تم التوصل", f"{cnt_contacted:,}", delta=f"{cnt_rate:.1f}% من إجمالي العملاء")
+ck2.metric("📵 لا يرد ومغلق", f"{cnt_no_ans_closed:,}", delta=f"{cnt_no_ans_pct:.1f}% من إجمالي العملاء")
+ck3.metric("🚫 عدم توصل", f"{cnt_other:,}", delta=f"{cnt_other_pct:.1f}% من إجمالي العملاء")
 
 if not contact_table_display.empty:
     st.markdown(f"##### 📋 جدول تحليل حالات التوصل وعدم التوصل حسب {GROUP_LABEL}:")
